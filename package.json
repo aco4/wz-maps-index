@@ -32,9 +32,6 @@
     "url": "https://github.com/aco4/wz-maps-index/issues"
   },
   "homepage": "https://github.com/aco4/wz-maps-index#readme",
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  },
   "keywords": [
     "warzone2100",
     "warzone-2100",
