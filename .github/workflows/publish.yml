@@ -20,7 +20,7 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: '@aco4'
           cache: npm
-      - run: npm install
+      - run: npm ci
       - run: npm test
       - run: npm publish
         env:
