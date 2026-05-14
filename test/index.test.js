@@ -2,15 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  DuplicateMapNameError,
   buildIndex,
   getDownloadUrls,
-  getInfoUrl,
-  getMapByName,
-  getPreviewUrl,
-  getPrimaryDownloadUrl,
-  getReadmeUrl,
-  resolveMapDatabaseUrlTemplate,
+  MapDatabaseFetchError,
+  MapDatabaseSchemaError,
+  searchByName,
+  TemplateResolutionError,
 } from "../dist/index.js";
 
 const templates = {
@@ -81,6 +78,8 @@ function mockFetch(routes) {
 }
 
 test("buildIndex follows pagination and creates an exact-name index", async () => {
+  const requestInit = { headers: { "x-test": "1" } };
+  const calls = [];
   const routes = new Map([
     [
       "/api/v1/full.json",
@@ -108,79 +107,39 @@ test("buildIndex follows pagination and creates an exact-name index", async () =
 
   const index = await buildIndex({
     initialUrl: "https://maps.wz2100.net/api/v1/full.json",
-    fetch: mockFetch(routes),
+    requestInit,
+    fetch: async (input, init) => {
+      calls.push({ input: String(input), init });
+      return mockFetch(routes)(input);
+    },
   });
 
   assert.equal(index.size, 2);
-  assert.equal(index.pages.length, 2);
-  assert.deepEqual(getMapByName(index, "MyMap"), mapA);
-  assert.deepEqual(getMapByName(index, "myMap"), mapB);
-  assert.equal(getMapByName(index, "MYMAP"), null);
-  assert.equal(getMapByName(index, "MyMap "), null);
+  assert.deepEqual(index.pages, [
+    {
+      url: "https://maps.wz2100.net/api/v1/full.json",
+      id: "full-page-1",
+      version: "2026-01-01 00:00:00",
+      mapCount: 1,
+    },
+    {
+      url: "https://maps.wz2100.net/api/v1/full/page/2.json",
+      id: "full-page-2",
+      version: "2026-01-01 00:00:00",
+      mapCount: 1,
+    },
+  ]);
+  assert.deepEqual(calls, [
+    { input: "https://maps.wz2100.net/api/v1/full.json", init: requestInit },
+    { input: "https://maps.wz2100.net/api/v1/full/page/2.json", init: requestInit },
+  ]);
+  assert.deepEqual(searchByName(index, "MyMap"), [mapA]);
+  assert.deepEqual(searchByName(index, "myMap"), [mapB]);
+  assert.deepEqual(searchByName(index, "MYMAP"), []);
+  assert.deepEqual(searchByName(index, "MyMap "), []);
 });
 
-test("getDownloadUrls exposes primary and mirrors", async () => {
-  const routes = new Map([
-    [
-      "/api/v1/full.json",
-      {
-        type: "wz2100.mapdatabase.full.v1",
-        links: { self: "/api/v1/full.json" },
-        "asset-url-templates": templates,
-        maps: [mapA],
-      },
-    ],
-  ]);
-
-  const index = await buildIndex({
-    initialUrl: "https://maps.wz2100.net/api/v1/full.json",
-    fetch: mockFetch(routes),
-  });
-
-  assert.deepEqual(getDownloadUrls(index, "missing"), null);
-
-  const urls = getDownloadUrls(index, "MyMap");
-  assert.ok(urls);
-  assert.equal(
-    urls.primary,
-    "https://github.com/Warzone2100/maps-8p/releases/download/v1/8p-MyMap.wz",
-  );
-  assert.deepEqual(urls.mirrors, ["https://mirror.example.test/maps/hash-a/v1/8p-MyMap.wz"]);
-  assert.deepEqual(urls.all, [
-    "https://github.com/Warzone2100/maps-8p/releases/download/v1/8p-MyMap.wz",
-    "https://mirror.example.test/maps/hash-a/v1/8p-MyMap.wz",
-  ]);
-  assert.equal(
-    getPrimaryDownloadUrl(index, "MyMap"),
-    "https://github.com/Warzone2100/maps-8p/releases/download/v1/8p-MyMap.wz",
-  );
-});
-
-test("asset helpers resolve preview, readme, and info URLs", async () => {
-  const routes = new Map([
-    [
-      "/api/v1/full.json",
-      {
-        type: "wz2100.mapdatabase.full.v1",
-        links: { self: "/api/v1/full.json" },
-        "asset-url-templates": templates,
-        maps: [mapA],
-      },
-    ],
-  ]);
-
-  const index = await buildIndex({
-    initialUrl: "https://maps.wz2100.net/api/v1/full.json",
-    fetch: mockFetch(routes),
-  });
-
-  assert.equal(getPreviewUrl(index, "MyMap"), "https://maps-assets.wz2100.net/v1/maps/hash-a/preview.png");
-  assert.equal(getReadmeUrl(index, "MyMap"), "https://maps-assets.wz2100.net/v1/maps/hash-a/readme.md");
-  assert.equal(getInfoUrl(index, "MyMap"), "https://maps-assets.wz2100.net/v1/maps/hash-a.json");
-  assert.equal(getPreviewUrl(index, "missing"), null);
-});
-
-test("buildIndex rejects duplicate names", async () => {
+test("buildIndex preserves duplicate names in insertion order", async () => {
   const duplicate = makeMapInfo("MyMap", "2p", "v1/2p-MyMap.wz", "hash-c");
   const routes = new Map([
     [
@@ -194,18 +153,154 @@ test("buildIndex rejects duplicate names", async () => {
     ],
   ]);
 
+  const index = await buildIndex({
+    initialUrl: "https://maps.wz2100.net/api/v1/full.json",
+    fetch: mockFetch(routes),
+  });
+
+  assert.equal(index.size, 1);
+  assert.deepEqual(searchByName(index, "MyMap"), [mapA, duplicate]);
+});
+
+test("getDownloadUrls resolves primary and mirror templates for a map", async () => {
+  const routes = new Map([
+    [
+      "/api/v1/full.json",
+      {
+        type: "wz2100.mapdatabase.full.v1",
+        links: { self: "/api/v1/full.json" },
+        "asset-url-templates": templates,
+        maps: [mapA],
+      },
+    ],
+  ]);
+
+  const index = await buildIndex({
+    initialUrl: "https://maps.wz2100.net/api/v1/full.json",
+    fetch: mockFetch(routes),
+  });
+
+  assert.deepEqual(getDownloadUrls(index, mapA), [
+    "https://github.com/Warzone2100/maps-8p/releases/download/v1/8p-MyMap.wz",
+    "https://mirror.example.test/maps/hash-a/v1/8p-MyMap.wz",
+  ]);
+});
+
+test("getDownloadUrls uses templates from the page containing the map", async () => {
+  const secondPageTemplates = {
+    ...templates,
+    download: ["https://cdn.example.test/{{download/hash}}/{{download/path}}"],
+  };
+  const routes = new Map([
+    [
+      "/api/v1/full.json",
+      {
+        type: "wz2100.mapdatabase.full.v1",
+        links: { self: "/api/v1/full.json", next: "/api/v1/full/page/2.json" },
+        "asset-url-templates": templates,
+        maps: [mapA],
+      },
+    ],
+    [
+      "/api/v1/full/page/2.json",
+      {
+        type: "wz2100.mapdatabase.full.v1",
+        links: { self: "/api/v1/full/page/2.json" },
+        "asset-url-templates": secondPageTemplates,
+        maps: [mapB],
+      },
+    ],
+  ]);
+
+  const index = await buildIndex({
+    initialUrl: "https://maps.wz2100.net/api/v1/full.json",
+    fetch: mockFetch(routes),
+  });
+
+  assert.deepEqual(getDownloadUrls(index, mapB), [
+    "https://cdn.example.test/hash-b/v2/4p-myMap.wz",
+  ]);
+});
+
+test("getDownloadUrls throws when a template pointer cannot be resolved", async () => {
+  const routes = new Map([
+    [
+      "/api/v1/full.json",
+      {
+        type: "wz2100.mapdatabase.full.v1",
+        links: { self: "/api/v1/full.json" },
+        "asset-url-templates": {
+          ...templates,
+          download: ["https://example.test/{{download/missing}}"],
+        },
+        maps: [mapA],
+      },
+    ],
+  ]);
+
+  const index = await buildIndex({
+    initialUrl: "https://maps.wz2100.net/api/v1/full.json",
+    fetch: mockFetch(routes),
+  });
+
+  assert.throws(() => getDownloadUrls(index, mapA), TemplateResolutionError);
+});
+
+test("buildIndex rejects non-OK responses with fetch details", async () => {
+  await assert.rejects(
+    () => buildIndex({
+      initialUrl: "https://maps.wz2100.net/api/v1/full.json",
+      fetch: async () => new Response("not found", { status: 404, statusText: "Not Found" }),
+    }),
+    (error) => {
+      assert.ok(error instanceof MapDatabaseFetchError);
+      assert.equal(error.url, "https://maps.wz2100.net/api/v1/full.json");
+      assert.equal(error.status, 404);
+      assert.equal(error.statusText, "Not Found");
+      return true;
+    },
+  );
+});
+
+test("buildIndex rejects pages without maps", async () => {
+  const routes = new Map([
+    [
+      "/api/v1/full.json",
+      {
+        type: "wz2100.mapdatabase.full.v1",
+        links: { self: "/api/v1/full.json" },
+        "asset-url-templates": templates,
+      },
+    ],
+  ]);
+
   await assert.rejects(
     () => buildIndex({
       initialUrl: "https://maps.wz2100.net/api/v1/full.json",
       fetch: mockFetch(routes),
     }),
-    DuplicateMapNameError,
+    MapDatabaseSchemaError,
   );
 });
 
-test("resolveMapDatabaseUrlTemplate supports optional leading slash in JSON Pointers", () => {
-  assert.equal(
-    resolveMapDatabaseUrlTemplate("repo={{/download/repo}}; path={{download/path}}", mapA),
-    "repo=8p; path=v1/8p-MyMap.wz",
+test("buildIndex rejects empty download templates", async () => {
+  const routes = new Map([
+    [
+      "/api/v1/full.json",
+      {
+        type: "wz2100.mapdatabase.full.v1",
+        links: { self: "/api/v1/full.json" },
+        "asset-url-templates": { ...templates, download: [] },
+        maps: [mapA],
+      },
+    ],
+  ]);
+
+  await assert.rejects(
+    () => buildIndex({
+      initialUrl: "https://maps.wz2100.net/api/v1/full.json",
+      fetch: mockFetch(routes),
+    }),
+    MapDatabaseSchemaError,
   );
 });
