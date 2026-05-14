@@ -1,0 +1,52 @@
+{
+  "name": "@aco4/wz-maps-index",
+  "version": "0.1.0",
+  "description": "JavaScript wrapper for the Warzone 2100 Maps Database API.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.js",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aco4/wz-maps-index.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aco4/wz-maps-index/issues"
+  },
+  "homepage": "https://github.com/aco4/wz-maps-index#readme",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "keywords": [
+    "warzone2100",
+    "warzone-2100",
+    "map",
+    "maps",
+    "maps-database",
+    "index"
+  ],
+  "author": "aco4",
+  "license": "GPL-2.0-or-later",
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}
